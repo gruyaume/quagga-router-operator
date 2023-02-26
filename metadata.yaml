@@ -1,0 +1,14 @@
+name: quagga-router-operator
+display-name: Quagga Router operator
+summary: Quagga Router operator
+description: Quagga Router operator
+
+containers:
+  quagga:
+    resource: quagga-image
+
+resources:
+  quagga-image:
+    type: oci-image
+    description: OCI image for 5G quagga-router
+    upstream-source: opencord/quagga
