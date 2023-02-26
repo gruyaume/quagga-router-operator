@@ -11,7 +11,8 @@ from charm import QuaggaOperatorCharm
 
 
 class TestCharm(unittest.TestCase):
-    def setUp(self):
+    @patch("lightkube.core.client.GenericSyncClient")
+    def setUp(self, patch_k8s_client):
         self.namespace = "whatever"
         self.harness = testing.Harness(QuaggaOperatorCharm)
         self.harness.set_model_name(name=self.namespace)
