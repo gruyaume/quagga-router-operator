@@ -4,11 +4,15 @@ summary: Quagga Router operator
 description: Quagga Router operator
 
 containers:
-  quagga:
-    resource: quagga-image
+  router:
+    resource: router-image
 
 resources:
-  quagga-image:
+  router-image:
     type: oci-image
-    description: OCI image for 5G quagga-router
+    description: OCI image for router
     upstream-source: opencord/quagga
+
+provides:
+  router:
+    interface: router

@@ -1,6 +1,6 @@
 # quagga-router-operator
 
-Quagga operator for use in 5G Core Network.
+Quagga Router operator for use in 5G Core Network.
 
 ## Usage
 
