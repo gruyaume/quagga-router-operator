@@ -5,6 +5,7 @@
 
 import json
 import logging
+from typing import Dict, List
 
 import httpx
 from lightkube import Client
@@ -30,10 +31,11 @@ NetworkAttachmentDefinition = create_namespaced_resource(
 class Kubernetes:
     """Kubernetes main class."""
 
-    def __init__(self, namespace: str):
+    def __init__(self, namespace: str, statefulset_name: str):
         """Initializes K8s client."""
         self.client = Client()
         self.namespace = namespace
+        self.statefulset_name = statefulset_name
 
     def create_network_attachment_definition(self) -> None:
         """Creates network attachment definitions.
@@ -52,7 +54,7 @@ class Kubernetes:
                 metadata=ObjectMeta(name=NETWORK_ATTACHMENT_DEFINITION_NAME),
                 spec=access_interface_spec,
             )
-            self.client.create(obj=network_attachment_definition, namespace=self.namespace)
+            self.client.create(obj=network_attachment_definition, namespace=self.namespace)  # type: ignore[call-overload]  # noqa: E501
             logger.info(
                 f"NetworkAttachmentDefinition {NETWORK_ATTACHMENT_DEFINITION_NAME} created"
             )
@@ -74,85 +76,95 @@ class Kubernetes:
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 logger.error(
-                    "NetworkAttachmentDefinition resource not found. You may need to install Multus CNI."
+                    "NetworkAttachmentDefinition resource not found."
+                    "You may need to install Multus CNI."
                 )
                 raise
             logger.info("Unexpected error while checking NetworkAttachmentDefinition")
             return False
         return False
 
-    def patch_statefulset(self, statefulset_name: str) -> None:
-        """Patches a statefulset with multus annotation.
-
-        Args:
-            statefulset_name: Statefulset name.
-
-        Returns:
-            None
-        """
-        if self.statefulset_is_patched(statefulset_name=statefulset_name):
+    def add_security_context_to_statefulset(self) -> None:
+        """Adds security context to the statefulset."""
+        if self.security_context_is_patched():
             return
         statefulset = self.client.get(
-            res=StatefulSet, name=statefulset_name, namespace=self.namespace
+            res=StatefulSet, name=self.statefulset_name, namespace=self.namespace
         )
         if not hasattr(statefulset, "spec"):
-            raise RuntimeError(f"Could not find `spec` in the {statefulset_name} statefulset")
-
-        multus_annotation = [
-            {
-                "name": NETWORK_ATTACHMENT_DEFINITION_NAME,
-                "interface": "core-gw",
-                "ips": ["192.168.250.1/24"],
-            },
-            {
-                "name": NETWORK_ATTACHMENT_DEFINITION_NAME,
-                "interface": "ran-gw",
-                "ips": ["192.168.251.1/24"],
-            },
-            {
-                "name": NETWORK_ATTACHMENT_DEFINITION_NAME,
-                "interface": "access-gw",
-                "ips": ["192.168.252.1/24"],
-            },
-        ]
-
-        statefulset.spec.template.metadata.annotations["k8s.v1.cni.cncf.io/networks"] = json.dumps(
-            multus_annotation
-        )
-
+            raise RuntimeError("Could not find `spec` in the statefulset")
         statefulset.spec.template.spec.containers[1].securityContext.privileged = True
         statefulset.spec.template.spec.containers[1].securityContext.capabilities = Capabilities(
             add=[
                 "NET_ADMIN",
             ]
         )
-
         self.client.patch(
             res=StatefulSet,
-            name=statefulset_name,
+            name=self.statefulset_name,
             obj=statefulset,
             patch_type=PatchType.MERGE,
             namespace=self.namespace,
         )
-        logger.info(f"Multus annotation added to {statefulset_name} Statefulset")
+        logger.info("Security Context patched in statefulset")
 
-    def statefulset_is_patched(self, statefulset_name: str) -> bool:
-        """Returns whether the statefulset has the expected multus annotation.
-
-        Args:
-            statefulset_name: Statefulset name.
-
-        """
+    def add_multus_annotation_to_statefulset(self, interface_name: str, ips: List[str]) -> None:
+        """Adds a multus annotation to the statefulset."""
+        annotation = {
+            "name": NETWORK_ATTACHMENT_DEFINITION_NAME,
+            "interface": interface_name,
+            "ips": ips,
+        }
+        if self.annotation_is_added_to_statefulset(annotation=annotation):
+            return
         statefulset = self.client.get(
-            res=StatefulSet, name=statefulset_name, namespace=self.namespace
+            res=StatefulSet, name=self.statefulset_name, namespace=self.namespace
         )
         if not hasattr(statefulset, "spec"):
-            raise RuntimeError(f"Could not find `spec` in the {statefulset_name} statefulset")
+            raise RuntimeError("Could not find `spec` in the statefulset")
 
+        statefulset.spec.template.metadata.annotations["k8s.v1.cni.cncf.io/networks"].append(
+            annotation
+        )
+        self.client.patch(
+            res=StatefulSet,
+            name=self.statefulset_name,
+            obj=statefulset,
+            patch_type=PatchType.MERGE,
+            namespace=self.namespace,
+        )
+
+    def annotation_is_added_to_statefulset(self, annotation: Dict) -> bool:
+        """Returns whether a given annotation is in the statefulset."""
+        statefulset = self.client.get(
+            res=StatefulSet, name=self.statefulset_name, namespace=self.namespace
+        )
+        if not hasattr(statefulset, "spec"):
+            return False
         if "k8s.v1.cni.cncf.io/networks" not in statefulset.spec.template.metadata.annotations:
             logger.info("Multus annotation not yet added to statefulset")
             return False
+        if (
+            annotation
+            not in statefulset.spec.template.metadata.annotations["k8s.v1.cni.cncf.io/networks"]
+        ):
+            return False
+        return True
 
+    def security_context_is_patched(self) -> bool:
+        """Returns whether the statefulset security context is patched."""
+        statefulset = self.client.get(
+            res=StatefulSet, name=self.statefulset_name, namespace=self.namespace
+        )
+        if not hasattr(statefulset, "spec"):
+            return False
+        if not statefulset.spec.template.spec.containers[1].securityContext.privileged:
+            return False
+        if (
+            "NET_ADMIN"
+            not in statefulset.spec.template.spec.containers[1].securityContext.capabilities.add
+        ):
+            return False
         return True
 
     def delete_network_attachment_definition(self) -> None:
